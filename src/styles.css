@@ -1142,6 +1142,251 @@ body.dark-mode .toggle-option.active {
     flex-shrink: 0;
 }
 
+/* Mobile Responsive Styles */
+@media (max-width: 768px) {
+
+    /* Title Bar - Stack vertically on mobile */
+    .title-bar {
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 12px;
+        justify-content: space-between;
+    }
+
+    /* Period Navigation */
+    .period-nav {
+        order: 1;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+
+    .period-display {
+        font-size: 14px;
+        min-width: 100px;
+    }
+
+    /* Undo/Redo - Compact on mobile */
+    .undo-redo-nav {
+        order: 2;
+        flex-shrink: 0;
+    }
+
+    /* Groups Panel - Full width on second row, scrollable */
+    .groups-panel {
+        order: 3;
+        width: 100%;
+        margin-left: 0;
+        padding-right: 0;
+        justify-content: flex-start;
+        gap: 8px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 4px;
+    }
+
+    /* Groups toggles - Scrollable on mobile */
+    .groups-toggles {
+        flex-shrink: 0;
+        gap: 6px;
+    }
+
+    .group-toggle {
+        flex-shrink: 0;
+        font-size: 11px;
+    }
+
+    .group-selector {
+        flex-shrink: 0;
+        font-size: 11px;
+    }
+
+    .group-selector select {
+        padding: 3px 6px;
+        font-size: 10px;
+    }
+
+    .nav-btn.small {
+        width: 24px;
+        height: 24px;
+    }
+
+    /* Calendar Container - Allow horizontal scroll */
+    .calendar-container {
+        min-width: unset;
+        min-height: unset;
+        padding: 0 12px 12px 12px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Calendar Grid - Fixed width for scrolling */
+    .calendar-grid {
+        grid-template-columns: repeat(6, 140px);
+        min-width: max-content;
+    }
+
+    /* Month Header - Smaller on mobile */
+    .month-header {
+        font-size: 15px;
+        padding: 6px 6px;
+    }
+
+    /* Day Row - Compact on mobile */
+    .day-row {
+        min-height: 24px;
+        font-size: 12px;
+        padding: 2px 4px;
+    }
+
+    .day-name {
+        font-size: 10px;
+        width: 14px;
+    }
+
+    .day-number {
+        font-size: 12px;
+        width: 20px;
+        margin-right: 4px;
+    }
+
+    .week-number {
+        font-size: 10px;
+        min-width: 16px;
+    }
+
+    /* Canvas Layer - Adjust for mobile padding */
+    .canvas-layer {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+    }
+
+    /* Footer - Compact */
+    .footer {
+        padding: 4px 12px 8px 12px;
+    }
+
+    .footer-text {
+        font-size: 11px;
+    }
+
+    /* Nav buttons - Larger touch targets */
+    .nav-btn {
+        width: 36px;
+        height: 36px;
+    }
+
+    .nav-btn.small {
+        width: 28px;
+        height: 28px;
+    }
+
+    /* Inline toolbars - Full width at bottom on mobile */
+    .inline-toolbar {
+        left: 8px !important;
+        right: 8px !important;
+        bottom: 60px !important;
+        top: auto !important;
+        width: auto !important;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .toolbar-btn {
+        width: 36px;
+        height: 36px;
+    }
+
+    /* Settings and modal dialogs */
+    .modal-dialog {
+        margin: 12px;
+        max-width: calc(100vw - 24px);
+    }
+
+    .settings-dialog {
+        min-width: unset;
+        max-width: calc(100vw - 24px);
+    }
+}
+
+/* Extra small screens */
+@media (max-width: 480px) {
+    .title-bar {
+        padding: 6px 8px;
+        gap: 4px;
+    }
+
+    .period-display {
+        font-size: 12px;
+        min-width: 90px;
+    }
+
+    .calendar-grid {
+        grid-template-columns: repeat(6, 120px);
+    }
+
+    .month-header {
+        font-size: 13px;
+        padding: 4px 4px;
+    }
+
+    /* Further reduce elements */
+    .group-toggle {
+        font-size: 10px;
+    }
+
+    .group-toggle input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+    }
+
+    .group-color-dot {
+        width: 8px;
+        height: 8px;
+    }
+
+    .group-selector label {
+        display: none;
+    }
+
+    .groups-panel {
+        gap: 4px;
+    }
+
+    .nav-btn {
+        width: 32px;
+        height: 32px;
+    }
+
+    .nav-btn.small {
+        width: 22px;
+        height: 22px;
+    }
+
+    /* Smaller day content on tiny screens */
+    .day-row {
+        min-height: 22px;
+        font-size: 11px;
+        padding: 2px 3px;
+    }
+
+    .day-name {
+        font-size: 9px;
+        width: 12px;
+    }
+
+    .day-number {
+        font-size: 11px;
+        width: 18px;
+        margin-right: 3px;
+    }
+
+    .week-number {
+        font-size: 9px;
+        min-width: 14px;
+    }
+}
+
 /* CRITICAL: Override all cursors when editor is open (must be at end for specificity) */
 body.editor-open,
 body.editor-open *,
