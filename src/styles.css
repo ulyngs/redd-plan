@@ -1052,3 +1052,62 @@ body.dark-mode .modal-input {
 .modal-btn-danger:hover {
     background: #dc2626;
 }
+
+/* Settings Modal */
+.settings-dialog {
+    min-width: 280px;
+    max-width: 350px;
+}
+
+.settings-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+}
+
+.settings-row:not(:last-child) {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.settings-row label {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.toggle-switch {
+    display: flex;
+    gap: 4px;
+    background: var(--app-bg);
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.toggle-option {
+    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.15s ease;
+}
+
+.toggle-option.active {
+    background: var(--panel-bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+body.dark-mode .toggle-option.active {
+    background: #334155;
+}
+
+#language-select {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+}

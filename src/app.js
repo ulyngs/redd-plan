@@ -4,6 +4,7 @@
 // State
 let currentYear = new Date().getFullYear();
 let currentHalf = new Date().getMonth() < 6 ? 1 : 2;
+let currentLanguage = 'en'; // 'da' or 'en'
 let freeformNotes = []; // Array of {id, text, html, x, y, year, half, snapToDate, group}
 let freeformLines = []; // Array of {id, x1, y1, x2, y2, year, half, color, width, group}
 let groups = []; // Array of {id, name, color, visible}
@@ -27,6 +28,57 @@ const MONTHS_DA = [
 
 // Danish weekday abbreviations (Monday = 0)
 const WEEKDAYS_DA = ['Ma', 'Ti', 'On', 'To', 'Fr', 'Lø', 'Sø'];
+
+// English month names
+const MONTHS_EN = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+// English weekday abbreviations (Monday = 0)
+const WEEKDAYS_EN = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+
+// UI Text translations
+const UI_TEXT = {
+    da: {
+        settings: 'Indstillinger',
+        theme: 'Tema',
+        language: 'Sprog',
+        newItems: 'Nye elementer:',
+        addGroup: 'Tilføj gruppe',
+        renameGroup: 'Omdøb gruppe',
+        deleteGroup: 'Slet gruppe',
+        cannotDelete: 'Kan ikke slette',
+        cannotDeleteLast: 'Du kan ikke slette den sidste gruppe.',
+        deleteConfirm: 'Slet gruppe',
+        deleteMessage: 'Elementer i denne gruppe flyttes til Personal.',
+        add: 'Tilføj',
+        rename: 'Omdøb',
+        delete: 'Slet',
+        cancel: 'Annuller',
+        personal: 'Personligt',
+        work: 'Arbejde'
+    },
+    en: {
+        settings: 'Settings',
+        theme: 'Theme',
+        language: 'Language',
+        newItems: 'New items:',
+        addGroup: 'Add Group',
+        renameGroup: 'Rename Group',
+        deleteGroup: 'Delete Group',
+        cannotDelete: 'Cannot Delete',
+        cannotDeleteLast: 'You cannot delete the last group.',
+        deleteConfirm: 'Delete Group',
+        deleteMessage: 'Items in this group will be moved to Personal.',
+        add: 'Add',
+        rename: 'Rename',
+        delete: 'Delete',
+        cancel: 'Cancel',
+        personal: 'Personal',
+        work: 'Work'
+    }
+};
 
 // Calculate Easter Sunday using the Anonymous Gregorian algorithm
 function getEasterSunday(year) {
@@ -64,33 +116,45 @@ function getDanishHolidays(year) {
         return `${date.getFullYear()}-${m}-${d}`;
     };
 
-    // Easter-based holidays
-    holidays[formatKey(addDays(easter, -7))] = 'Palmesøndag';
-    holidays[formatKey(addDays(easter, -3))] = 'Skærtorsdag';
-    holidays[formatKey(addDays(easter, -2))] = 'Langfredag';
-    holidays[formatKey(easter)] = 'Påskedag';
-    holidays[formatKey(addDays(easter, 1))] = '2. påskedag';
-    holidays[formatKey(addDays(easter, 39))] = 'Kr. himmelfartsdag';
-    holidays[formatKey(addDays(easter, 49))] = 'Pinsedag';
-    holidays[formatKey(addDays(easter, 50))] = '2. pinsedag';
-
-    // Fixed holidays
-    holidays[`${year}-01-01`] = 'Nytårsdag';
-    holidays[`${year}-06-05`] = 'Grundlovsdag';
-    holidays[`${year}-12-24`] = 'Juleaften';
-    holidays[`${year}-12-25`] = 'Juledag';
-    holidays[`${year}-12-26`] = '2. Juledag';
+    if (currentLanguage === 'da') {
+        // Danish mode - show all Danish holidays
+        holidays[formatKey(addDays(easter, -7))] = 'Palmesøndag';
+        holidays[formatKey(addDays(easter, -3))] = 'Skærtorsdag';
+        holidays[formatKey(addDays(easter, -2))] = 'Langfredag';
+        holidays[formatKey(easter)] = 'Påskedag';
+        holidays[formatKey(addDays(easter, 1))] = '2. påskedag';
+        holidays[formatKey(addDays(easter, 39))] = 'Kr. himmelfartsdag';
+        holidays[formatKey(addDays(easter, 49))] = 'Pinsedag';
+        holidays[formatKey(addDays(easter, 50))] = '2. pinsedag';
+        holidays[`${year}-01-01`] = 'Nytårsdag';
+        holidays[`${year}-06-05`] = 'Grundlovsdag';
+        holidays[`${year}-12-24`] = 'Juleaften';
+        holidays[`${year}-12-25`] = 'Juledag';
+        holidays[`${year}-12-26`] = '2. Juledag';
+    } else {
+        // English mode - show only universal holidays
+        holidays[formatKey(addDays(easter, -7))] = 'Palm Sunday';
+        holidays[formatKey(addDays(easter, -3))] = 'Maundy Thursday';
+        holidays[formatKey(addDays(easter, -2))] = 'Good Friday';
+        holidays[formatKey(easter)] = 'Easter Sunday';
+        holidays[formatKey(addDays(easter, 1))] = 'Easter Monday';
+        holidays[`${year}-01-01`] = 'New Year\'s Day';
+        holidays[`${year}-12-24`] = 'Christmas Eve';
+        holidays[`${year}-12-25`] = 'Christmas Day';
+    }
 
     return holidays;
 }
 
-// Cache holidays
+// Cache holidays (invalidate on language change)
 let cachedHolidaysYear = null;
+let cachedHolidaysLang = null;
 let cachedHolidays = {};
 
 function getHolidays(year) {
-    if (cachedHolidaysYear !== year) {
+    if (cachedHolidaysYear !== year || cachedHolidaysLang !== currentLanguage) {
         cachedHolidaysYear = year;
+        cachedHolidaysLang = currentLanguage;
         cachedHolidays = getDanishHolidays(year);
     }
     return cachedHolidays;
@@ -173,13 +237,14 @@ function findClosestDateRowY(yPosition) {
 const NOTES_KEY = 'redd-map-freeform-notes';
 const LINES_KEY = 'redd-map-freeform-lines';
 const THEME_KEY = 'redd-map-theme';
+const LANGUAGE_KEY = 'redd-map-language';
 const GROUPS_KEY = 'redd-map-groups';
 const ACTIVE_GROUP_KEY = 'redd-map-active-group';
 
-// Default groups
+// Default groups (use translationKey for built-in groups)
 const DEFAULT_GROUPS = [
-    { id: 'personal', name: 'Personal', color: '#667eea', visible: true },
-    { id: 'work', name: 'Work', color: '#f59e0b', visible: true }
+    { id: 'personal', translationKey: 'personal', color: '#667eea', visible: true },
+    { id: 'work', translationKey: 'work', color: '#f59e0b', visible: true }
 ];
 
 // DOM Elements
@@ -193,6 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loadData();
     loadTheme();
+    loadLanguage();
     setupWindowControls();
     setupEventListeners();
     setupCanvasInteraction();
@@ -397,6 +463,14 @@ function showModal({ title, message, inputPlaceholder = '', showInput = false, c
     });
 }
 
+// Get display name for a group - translates built-in groups, uses name for custom ones
+function getGroupDisplayName(group) {
+    if (group.translationKey && UI_TEXT[currentLanguage][group.translationKey]) {
+        return UI_TEXT[currentLanguage][group.translationKey];
+    }
+    return group.name || group.id;
+}
+
 // Render groups UI - toggles, selectors
 function renderGroupsUI() {
     const togglesContainer = document.getElementById('groups-toggles');
@@ -416,10 +490,13 @@ function renderGroupsUI() {
         wrapper.className = 'group-toggle';
         wrapper.draggable = true;
         wrapper.dataset.groupIndex = index;
+        // Get display name - translate if it's a built-in group, otherwise use custom name
+        const displayName = getGroupDisplayName(group);
+
         wrapper.innerHTML = `
             <label>
                 <input type="checkbox" data-group-id="${group.id}" ${group.visible ? 'checked' : ''}>
-                <span class="group-name">${group.name}</span>
+                <span class="group-name">${displayName}</span>
             </label>
             <button class="group-delete-btn" data-group-id="${group.id}" title="Delete group">×</button>
         `;
@@ -553,19 +630,21 @@ function renderGroupsUI() {
 
     // Populate selectors
     groups.forEach(group => {
+        const displayName = getGroupDisplayName(group);
+
         const option1 = document.createElement('option');
         option1.value = group.id;
-        option1.textContent = group.name;
+        option1.textContent = displayName;
         activeGroupSelect.appendChild(option1);
 
         const option2 = document.createElement('option');
         option2.value = group.id;
-        option2.textContent = group.name;
+        option2.textContent = displayName;
         noteGroupSelect.appendChild(option2);
 
         const option3 = document.createElement('option');
         option3.value = group.id;
-        option3.textContent = group.name;
+        option3.textContent = displayName;
         lineGroupSelect.appendChild(option3);
     });
 
@@ -580,11 +659,12 @@ function renderGroupsUI() {
 
     // Add group button handler
     document.getElementById('add-group-btn').addEventListener('click', async () => {
+        const t = UI_TEXT[currentLanguage];
         const name = await showModal({
-            title: 'Add Group',
+            title: t.addGroup,
             inputPlaceholder: 'Group name',
             showInput: true,
-            confirmText: 'Add'
+            confirmText: t.add
         });
         if (name) {
             const id = name.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now();
@@ -595,6 +675,82 @@ function renderGroupsUI() {
             renderGroupsUI();
         }
     });
+
+    // Settings button handler
+    setupSettings();
+}
+
+// Settings modal setup
+function setupSettings() {
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const settingsClose = document.getElementById('settings-close');
+    const themeLight = document.getElementById('theme-light');
+    const themeDark = document.getElementById('theme-dark');
+    const languageSelect = document.getElementById('language-select');
+
+    // Open settings
+    settingsBtn.addEventListener('click', () => {
+        updateSettingsUI();
+        settingsOverlay.classList.remove('hidden');
+    });
+
+    // Close settings
+    settingsClose.addEventListener('click', () => {
+        settingsOverlay.classList.add('hidden');
+    });
+
+    // Close on overlay click
+    settingsOverlay.addEventListener('click', (e) => {
+        if (e.target === settingsOverlay) {
+            settingsOverlay.classList.add('hidden');
+        }
+    });
+
+    // Theme buttons
+    themeLight.addEventListener('click', () => {
+        document.body.classList.remove('dark-mode');
+        localStorage.setItem(THEME_KEY, 'light');
+        updateSettingsUI();
+    });
+
+    themeDark.addEventListener('click', () => {
+        document.body.classList.add('dark-mode');
+        localStorage.setItem(THEME_KEY, 'dark');
+        updateSettingsUI();
+    });
+
+    // Language select
+    languageSelect.addEventListener('change', (e) => {
+        currentLanguage = e.target.value;
+        localStorage.setItem(LANGUAGE_KEY, currentLanguage);
+        updateUIText();
+        renderCalendar();
+        renderGroupsUI();
+        updateSettingsUI();
+    });
+}
+
+// Update settings UI to reflect current state
+function updateSettingsUI() {
+    const isDark = document.body.classList.contains('dark-mode');
+    document.getElementById('theme-light').classList.toggle('active', !isDark);
+    document.getElementById('theme-dark').classList.toggle('active', isDark);
+    document.getElementById('language-select').value = currentLanguage;
+
+    // Update settings labels
+    const t = UI_TEXT[currentLanguage];
+    document.getElementById('settings-title').textContent = t.settings;
+    document.getElementById('theme-label').textContent = t.theme;
+    document.getElementById('language-label').textContent = t.language;
+}
+
+// Update all UI text based on current language
+function updateUIText() {
+    const t = UI_TEXT[currentLanguage];
+    // Update "New items:" label
+    const newItemsLabel = document.querySelector('.group-selector label');
+    if (newItemsLabel) newItemsLabel.textContent = t.newItems;
 }
 
 // Load theme preference
@@ -603,6 +759,15 @@ function loadTheme() {
     if (savedTheme === 'dark') {
         document.body.classList.add('dark-mode');
     }
+}
+
+// Load language preference
+function loadLanguage() {
+    const savedLanguage = localStorage.getItem(LANGUAGE_KEY);
+    if (savedLanguage) {
+        currentLanguage = savedLanguage;
+    }
+    updateUIText();
 }
 
 // Toggle theme
@@ -622,7 +787,6 @@ function setupEventListeners() {
     const periodDisplay = document.getElementById('period-display');
     const prevPeriodBtn = document.getElementById('prev-period-btn');
     const nextPeriodBtn = document.getElementById('next-period-btn');
-    const themeToggleBtn = document.getElementById('theme-toggle-btn');
 
     prevPeriodBtn.addEventListener('click', () => {
         if (currentHalf === 1) {
@@ -647,8 +811,6 @@ function setupEventListeners() {
         renderCalendar();
         renderFreeformElements();
     });
-
-    themeToggleBtn.addEventListener('click', toggleTheme);
 
     // Keyboard navigation
     document.addEventListener('keydown', (e) => {
@@ -733,7 +895,7 @@ function createMonthColumn(month) {
 
     const header = document.createElement('div');
     header.className = 'month-header';
-    header.textContent = MONTHS_DA[month];
+    header.textContent = currentLanguage === 'da' ? MONTHS_DA[month] : MONTHS_EN[month];
     column.appendChild(header);
 
     const daysContainer = document.createElement('div');
@@ -755,7 +917,7 @@ function createMonthColumn(month) {
 
         const dayName = document.createElement('span');
         dayName.className = 'day-name';
-        dayName.textContent = WEEKDAYS_DA[weekdayIndex];
+        dayName.textContent = currentLanguage === 'da' ? WEEKDAYS_DA[weekdayIndex] : WEEKDAYS_EN[weekdayIndex];
         dayRow.appendChild(dayName);
 
         const dayNumber = document.createElement('span');
