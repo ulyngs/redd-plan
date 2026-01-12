@@ -1,19 +1,23 @@
-// ReDD Map - Danish 6-Month Calendar App
-// Main application logic
-
-const { ipcRenderer } = require('electron');
+// ReDD Plan - Danish 6-Month Calendar App
+// Main application logic (PWA version)
 
 // State
 let currentYear = new Date().getFullYear();
 let currentHalf = new Date().getMonth() < 6 ? 1 : 2;
-let freeformNotes = []; // Array of {id, text, html, x, y, year, half}
-let freeformLines = []; // Array of {id, x1, y1, x2, y2, year, half, color, width}
+let freeformNotes = []; // Array of {id, text, html, x, y, year, half, snapToDate, group}
+let freeformLines = []; // Array of {id, x1, y1, x2, y2, year, half, color, width, group}
+let groups = []; // Array of {id, name, color, visible}
+let activeGroup = 'personal'; // Currently selected group for new items
 
 // Editor/Selection State
 let selectedElement = null; // { type: 'note'|'line', id: string, element: HTMLElement }
-let quillInstance = null;
 let lastDeletedItem = null; // { type: 'note'|'line', data: object }
 let undoTimeout = null;
+
+// Undo/Redo History
+let undoStack = []; // Array of state snapshots
+let redoStack = []; // Array of state snapshots
+const MAX_HISTORY = 50; // Maximum number of undo steps
 
 // Danish month names
 const MONTHS_DA = [
@@ -92,10 +96,91 @@ function getHolidays(year) {
     return cachedHolidays;
 }
 
+// Find the closest date row's note-area and return snapped position
+function findClosestDateRowPosition(xPosition, yPosition) {
+    const calendarGrid = document.getElementById('calendar-grid');
+    if (!calendarGrid) return { x: xPosition, y: yPosition };
+
+    const dayRows = calendarGrid.querySelectorAll('.day-row');
+    if (dayRows.length === 0) return { x: xPosition, y: yPosition };
+
+    const canvasRect = canvasLayer.getBoundingClientRect();
+    const containerScrollTop = calendarContainer.scrollTop;
+
+    let closestRow = null;
+    let closestNoteArea = null;
+    let minDistance = Infinity;
+
+    // Find closest row considering both X and Y using FULL ROW bounds
+    dayRows.forEach(row => {
+        const noteArea = row.querySelector('.note-area');
+        if (!noteArea) return;
+
+        const rowRect = row.getBoundingClientRect();
+
+        // Use full row bounds for finding closest row (includes day abbrev/number)
+        const rowLeft = rowRect.left - canvasRect.left;
+        const rowRight = rowRect.right - canvasRect.left;
+        const rowTextY = rowRect.top - canvasRect.top + containerScrollTop + 4;
+
+        // Calculate X distance to the full row (0 if within the row)
+        let xDistance = 0;
+        if (xPosition < rowLeft) {
+            xDistance = rowLeft - xPosition;
+        } else if (xPosition > rowRight) {
+            xDistance = xPosition - rowRight;
+        }
+
+        const yDistance = Math.abs(yPosition - rowTextY);
+
+        // Combined distance (weight X more to allow column changes)
+        const distance = xDistance * 0.5 + yDistance;
+
+        if (distance < minDistance) {
+            minDistance = distance;
+            closestRow = row;
+            closestNoteArea = noteArea;
+        }
+    });
+
+    // Snap to the closest note-area
+    let snappedX = xPosition;
+    let snappedY = yPosition;
+
+    if (closestRow && closestNoteArea) {
+        const rowRect = closestRow.getBoundingClientRect();
+        const noteAreaRect = closestNoteArea.getBoundingClientRect();
+
+        snappedY = rowRect.top - canvasRect.top + containerScrollTop + 4;
+
+        const noteAreaLeft = noteAreaRect.left - canvasRect.left;
+        const noteAreaRight = noteAreaRect.right - canvasRect.left;
+
+        // Snap X to be within the note area (with small padding)
+        snappedX = Math.max(noteAreaLeft + 4, Math.min(xPosition, noteAreaRight - 20));
+    }
+
+    return { x: snappedX, y: snappedY };
+}
+
+// Legacy wrapper for Y-only snapping
+function findClosestDateRowY(yPosition) {
+    const result = findClosestDateRowPosition(0, yPosition);
+    return result.y;
+}
+
 // Storage keys
 const NOTES_KEY = 'redd-map-freeform-notes';
 const LINES_KEY = 'redd-map-freeform-lines';
 const THEME_KEY = 'redd-map-theme';
+const GROUPS_KEY = 'redd-map-groups';
+const ACTIVE_GROUP_KEY = 'redd-map-active-group';
+
+// Default groups
+const DEFAULT_GROUPS = [
+    { id: 'personal', name: 'Personal', color: '#667eea', visible: true },
+    { id: 'work', name: 'Work', color: '#f59e0b', visible: true }
+];
 
 // DOM Elements
 let calendarContainer;
@@ -113,6 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCanvasInteraction();
     updatePeriodDisplay();
     renderCalendar();
+    renderGroupsUI();
     renderFreeformElements();
 });
 
@@ -127,21 +213,388 @@ function loadData() {
         if (storedLines) {
             freeformLines = JSON.parse(storedLines);
         }
+        const storedGroups = localStorage.getItem(GROUPS_KEY);
+        if (storedGroups) {
+            groups = JSON.parse(storedGroups);
+        } else {
+            groups = JSON.parse(JSON.stringify(DEFAULT_GROUPS));
+        }
+        const storedActiveGroup = localStorage.getItem(ACTIVE_GROUP_KEY);
+        if (storedActiveGroup) {
+            activeGroup = storedActiveGroup;
+        }
     } catch (e) {
         console.error('Failed to load data:', e);
         freeformNotes = [];
         freeformLines = [];
+        groups = JSON.parse(JSON.stringify(DEFAULT_GROUPS));
     }
 }
 
-// Save data to localStorage
+// Save data to localStorage (no history tracking - call pushHistory before modifying data)
 function saveData() {
     try {
         localStorage.setItem(NOTES_KEY, JSON.stringify(freeformNotes));
         localStorage.setItem(LINES_KEY, JSON.stringify(freeformLines));
+        localStorage.setItem(GROUPS_KEY, JSON.stringify(groups));
+        localStorage.setItem(ACTIVE_GROUP_KEY, activeGroup);
     } catch (e) {
         console.error('Failed to save data:', e);
     }
+}
+
+// Push current state to undo history - call this BEFORE modifying data
+function pushHistory() {
+    const currentState = JSON.stringify({ notes: freeformNotes, lines: freeformLines });
+
+    // Don't push if state hasn't changed (avoid duplicates)
+    if (undoStack.length > 0) {
+        const lastState = JSON.stringify(undoStack[undoStack.length - 1]);
+        if (currentState === lastState) return;
+    }
+
+    undoStack.push({
+        notes: JSON.parse(JSON.stringify(freeformNotes)),
+        lines: JSON.parse(JSON.stringify(freeformLines))
+    });
+
+    // Limit history size
+    if (undoStack.length > MAX_HISTORY) {
+        undoStack.shift();
+    }
+
+    // Clear redo stack when new action is taken
+    redoStack = [];
+
+    updateUndoRedoButtons();
+}
+
+// Undo last action
+function undoAction() {
+    if (undoStack.length === 0) return;
+
+    // Save current state to redo stack
+    redoStack.push({
+        notes: JSON.parse(JSON.stringify(freeformNotes)),
+        lines: JSON.parse(JSON.stringify(freeformLines))
+    });
+
+    // Pop and restore previous state
+    const previousState = undoStack.pop();
+    freeformNotes = previousState.notes;
+    freeformLines = previousState.lines;
+
+    // Save without adding to history
+    saveData(true);
+
+    // Re-render
+    deselectElement();
+    renderFreeformElements();
+
+    updateUndoRedoButtons();
+}
+
+// Redo previously undone action
+function redoAction() {
+    if (redoStack.length === 0) return;
+
+    // Save current state to undo stack
+    undoStack.push({
+        notes: JSON.parse(JSON.stringify(freeformNotes)),
+        lines: JSON.parse(JSON.stringify(freeformLines))
+    });
+
+    // Pop and restore redo state
+    const redoState = redoStack.pop();
+    freeformNotes = redoState.notes;
+    freeformLines = redoState.lines;
+
+    // Save without adding to history
+    saveData(true);
+
+    // Re-render
+    deselectElement();
+    renderFreeformElements();
+
+    updateUndoRedoButtons();
+}
+
+// Update undo/redo button states
+function updateUndoRedoButtons() {
+    const undoBtn = document.getElementById('undo-action-btn');
+    const redoBtn = document.getElementById('redo-action-btn');
+
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+}
+
+// Custom modal dialog helper
+function showModal({ title, message, inputPlaceholder = '', showInput = false, confirmText = 'OK', confirmDanger = false }) {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('modal-overlay');
+        const titleEl = document.getElementById('modal-title');
+        const messageEl = document.getElementById('modal-message');
+        const inputEl = document.getElementById('modal-input');
+        const confirmBtn = document.getElementById('modal-confirm');
+        const cancelBtn = document.getElementById('modal-cancel');
+        const closeBtn = document.getElementById('modal-close');
+
+        titleEl.textContent = title;
+        messageEl.textContent = message || '';
+        messageEl.classList.toggle('hidden', !message);
+        inputEl.value = '';
+        inputEl.placeholder = inputPlaceholder;
+        inputEl.classList.toggle('hidden', !showInput);
+        confirmBtn.textContent = confirmText;
+        confirmBtn.className = 'modal-btn ' + (confirmDanger ? 'modal-btn-danger' : 'modal-btn-primary');
+
+        overlay.classList.remove('hidden');
+
+        if (showInput) {
+            setTimeout(() => inputEl.focus(), 50);
+        }
+        // Click outside to close
+        const onOverlayClick = (e) => {
+            if (e.target === overlay) {
+                onCancel();
+            }
+        };
+
+        const cleanup = () => {
+            overlay.classList.add('hidden');
+            confirmBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            closeBtn.removeEventListener('click', onCancel);
+            inputEl.removeEventListener('keydown', onKeydown);
+            overlay.removeEventListener('click', onOverlayClick);
+        };
+
+        const onConfirm = () => {
+            cleanup();
+            resolve(showInput ? inputEl.value.trim() : true);
+        };
+
+        const onCancel = () => {
+            cleanup();
+            resolve(showInput ? null : false);
+        };
+
+        const onKeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                onConfirm();
+            }
+        };
+
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+        closeBtn.addEventListener('click', onCancel);
+        overlay.addEventListener('click', onOverlayClick);
+
+        if (showInput) {
+            inputEl.addEventListener('keydown', onKeydown);
+        }
+    });
+}
+
+// Render groups UI - toggles, selectors
+function renderGroupsUI() {
+    const togglesContainer = document.getElementById('groups-toggles');
+    const activeGroupSelect = document.getElementById('active-group-select');
+    const noteGroupSelect = document.getElementById('note-group-select');
+    const lineGroupSelect = document.getElementById('line-group-select');
+
+    // Clear existing
+    togglesContainer.innerHTML = '';
+    activeGroupSelect.innerHTML = '';
+    noteGroupSelect.innerHTML = '';
+    lineGroupSelect.innerHTML = '';
+
+    // Create toggle for each group
+    groups.forEach((group, index) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'group-toggle';
+        wrapper.draggable = true;
+        wrapper.dataset.groupIndex = index;
+        wrapper.innerHTML = `
+            <label>
+                <input type="checkbox" data-group-id="${group.id}" ${group.visible ? 'checked' : ''}>
+                <span class="group-name">${group.name}</span>
+            </label>
+            <button class="group-delete-btn" data-group-id="${group.id}" title="Delete group">×</button>
+        `;
+        togglesContainer.appendChild(wrapper);
+
+        // Drag handlers for reordering (live reorder like redd-do)
+        wrapper.addEventListener('dragstart', (e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', group.id);
+            setTimeout(() => wrapper.classList.add('dragging'), 0);
+        });
+
+        wrapper.addEventListener('dragend', () => {
+            wrapper.classList.remove('dragging');
+            // Save order from DOM on drag end
+            const groupElements = Array.from(togglesContainer.querySelectorAll('.group-toggle'));
+            const newOrder = groupElements.map(el => {
+                const checkbox = el.querySelector('input[data-group-id]');
+                return checkbox ? checkbox.dataset.groupId : null;
+            }).filter(Boolean);
+
+            // Reorder groups array to match DOM
+            const reorderedGroups = [];
+            newOrder.forEach(id => {
+                const grp = groups.find(g => g.id === id);
+                if (grp) reorderedGroups.push(grp);
+            });
+            if (reorderedGroups.length === groups.length) {
+                groups = reorderedGroups;
+                saveData();
+            }
+        });
+
+        wrapper.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const dragging = togglesContainer.querySelector('.dragging');
+            if (!dragging || dragging === wrapper) return;
+
+            // Get all group toggles and find insert position
+            const siblings = [...togglesContainer.querySelectorAll('.group-toggle:not(.dragging)')];
+            const nextSibling = siblings.find(sibling => {
+                const rect = sibling.getBoundingClientRect();
+                return e.clientX < rect.left + rect.width / 2;
+            });
+
+            if (nextSibling) {
+                togglesContainer.insertBefore(dragging, nextSibling);
+            } else {
+                togglesContainer.appendChild(dragging);
+            }
+        });
+
+        wrapper.addEventListener('drop', (e) => {
+            e.preventDefault();
+        });
+
+        // Toggle visibility handler
+        wrapper.querySelector('input').addEventListener('change', (e) => {
+            const grp = groups.find(g => g.id === group.id);
+            if (grp) {
+                grp.visible = e.target.checked;
+                saveData();
+                renderFreeformElements();
+            }
+        });
+
+        // Rename group handler (click on name)
+        wrapper.querySelector('.group-name').addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const newName = await showModal({
+                title: 'Rename Group',
+                inputPlaceholder: group.name,
+                showInput: true,
+                confirmText: 'Rename'
+            });
+
+            if (newName) {
+                const grp = groups.find(g => g.id === group.id);
+                if (grp) {
+                    grp.name = newName;
+                    saveData();
+                    renderGroupsUI();
+                }
+            }
+        });
+
+        // Delete group handler
+        wrapper.querySelector('.group-delete-btn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (groups.length <= 1) {
+                await showModal({
+                    title: 'Cannot Delete',
+                    message: 'You cannot delete the last group.',
+                    confirmText: 'OK'
+                });
+                return;
+            }
+
+            const confirmed = await showModal({
+                title: 'Delete Group',
+                message: `Delete group "${group.name}"? Items in this group will be moved to Personal.`,
+                confirmText: 'Delete',
+                confirmDanger: true
+            });
+
+            if (confirmed) {
+                // Move items to 'personal' group
+                freeformNotes.forEach(n => { if (n.group === group.id) n.group = 'personal'; });
+                freeformLines.forEach(l => { if (l.group === group.id) l.group = 'personal'; });
+
+                // Remove group
+                groups = groups.filter(g => g.id !== group.id);
+
+                // If active group was deleted, switch to first available
+                if (activeGroup === group.id) {
+                    activeGroup = groups[0]?.id || 'personal';
+                }
+
+                saveData();
+                renderGroupsUI();
+                renderFreeformElements();
+            }
+        });
+    });
+
+    // Populate selectors
+    groups.forEach(group => {
+        const option1 = document.createElement('option');
+        option1.value = group.id;
+        option1.textContent = group.name;
+        activeGroupSelect.appendChild(option1);
+
+        const option2 = document.createElement('option');
+        option2.value = group.id;
+        option2.textContent = group.name;
+        noteGroupSelect.appendChild(option2);
+
+        const option3 = document.createElement('option');
+        option3.value = group.id;
+        option3.textContent = group.name;
+        lineGroupSelect.appendChild(option3);
+    });
+
+    // Set current active group
+    activeGroupSelect.value = activeGroup;
+
+    // Active group change handler
+    activeGroupSelect.addEventListener('change', (e) => {
+        activeGroup = e.target.value;
+        saveData();
+    });
+
+    // Add group button handler
+    document.getElementById('add-group-btn').addEventListener('click', async () => {
+        const name = await showModal({
+            title: 'Add Group',
+            inputPlaceholder: 'Group name',
+            showInput: true,
+            confirmText: 'Add'
+        });
+        if (name) {
+            const id = name.toLowerCase().replace(/\s+/g, '-') + '-' + Date.now();
+            const colors = ['#10b981', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316'];
+            const color = colors[groups.length % colors.length];
+            groups.push({ id, name: name.trim(), color, visible: true });
+            saveData();
+            renderGroupsUI();
+        }
+    });
 }
 
 // Load theme preference
@@ -159,25 +612,9 @@ function toggleTheme() {
     localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
 }
 
-// Setup window controls (Windows/Linux)
+// Window controls removed - not needed for PWA
 function setupWindowControls() {
-    const windowControls = document.getElementById('window-controls');
-    if (navigator.platform.toLowerCase().includes('win') ||
-        navigator.platform.toLowerCase().includes('linux')) {
-        windowControls.classList.remove('hidden');
-    }
-
-    document.getElementById('min-btn')?.addEventListener('click', () => {
-        ipcRenderer.send('window-minimize');
-    });
-
-    document.getElementById('max-btn')?.addEventListener('click', () => {
-        ipcRenderer.send('window-maximize');
-    });
-
-    document.getElementById('close-btn')?.addEventListener('click', () => {
-        ipcRenderer.send('window-close');
-    });
+    // No-op for browser/PWA
 }
 
 // Setup event listeners
@@ -215,7 +652,9 @@ function setupEventListeners() {
 
     // Keyboard navigation
     document.addEventListener('keydown', (e) => {
+        // Don't navigate if editing text
         if (e.target.classList.contains('note-input-inline')) return;
+        if (e.target.getAttribute('contenteditable') === 'true') return;
 
         if (e.key === 'ArrowLeft') {
             prevPeriodBtn.click();
@@ -370,7 +809,14 @@ function setupCanvasInteraction() {
             e.target.classList.contains('note-line') ||
             e.target.classList.contains('month-header') ||
             e.target.closest('.title-bar') ||
-            e.target.closest('.footer')) {
+            e.target.closest('.footer') ||
+            e.target.closest('.inline-toolbar')) {
+            return;
+        }
+
+        // If an editor is open, close it instead of creating new elements
+        if (selectedElement) {
+            deselectElement();
             return;
         }
 
@@ -422,8 +868,9 @@ function setupCanvasInteraction() {
             if (isDragging && distance > 10) {
                 // Create line with start/end points
                 const lineId = Date.now().toString();
-                const defaultColor = '#667eea';
+                const defaultColor = '#333333';
                 const defaultWidth = 8;
+                pushHistory(); // Save state before adding line
                 freeformLines.push({
                     id: lineId,
                     x1: startX,
@@ -433,7 +880,8 @@ function setupCanvasInteraction() {
                     color: defaultColor,
                     width: defaultWidth,
                     year: currentYear,
-                    half: currentHalf
+                    half: currentHalf,
+                    group: activeGroup
                 });
                 saveData();
 
@@ -460,15 +908,20 @@ function setupCanvasInteraction() {
 function renderFreeformElements() {
     canvasLayer.innerHTML = '';
 
+    // Get visible group IDs
+    const visibleGroups = groups.filter(g => g.visible).map(g => g.id);
+
     freeformNotes
         .filter(note => note.year === currentYear && note.half === currentHalf)
+        .filter(note => !note.group || visibleGroups.includes(note.group))
         .forEach(note => {
-            const noteEl = createFreeformNote(note.id, note.text, note.x, note.y);
+            const noteEl = createFreeformNote(note.id, note.text, note.x, note.y, note.html, note.fontColor, note.bgColor);
             canvasLayer.appendChild(noteEl);
         });
 
     freeformLines
         .filter(line => line.year === currentYear && line.half === currentHalf)
+        .filter(line => !line.group || visibleGroups.includes(line.group))
         .forEach(line => {
             // Support both old (x1, x2, y) and new (x1, y1, x2, y2) format
             const y1 = line.y1 !== undefined ? line.y1 : line.y;
@@ -479,19 +932,35 @@ function renderFreeformElements() {
 }
 
 // Create freeform note element
-function createFreeformNote(id, text, x, y) {
+function createFreeformNote(id, text, x, y, html = null, fontColor = null, bgColor = null) {
     const noteEl = document.createElement('span');
     noteEl.className = 'note-text freeform';
-    noteEl.textContent = text;
+
+    // Use HTML if available, otherwise plain text
+    if (html) {
+        noteEl.innerHTML = html;
+    } else {
+        noteEl.textContent = text || 'New note';
+    }
+
     noteEl.style.left = x + 'px';
     noteEl.style.top = y + 'px';
     noteEl.dataset.noteId = id;
+
+    // Apply saved colors
+    if (fontColor) noteEl.style.color = fontColor;
+    if (bgColor) noteEl.style.backgroundColor = bgColor;
 
     // Track if we're dragging (to distinguish from click)
     let hasDragged = false;
 
     // Mousedown starts potential drag
     noteEl.addEventListener('mousedown', (e) => {
+        // Don't start drag if we're editing (contenteditable)
+        if (noteEl.getAttribute('contenteditable') === 'true') {
+            return;
+        }
+
         e.preventDefault();
         e.stopPropagation();
 
@@ -523,8 +992,20 @@ function createFreeformNote(id, text, x, y) {
 
             const note = freeformNotes.find(n => n.id === id);
             if (note) {
-                note.x = parseInt(noteEl.style.left) || 0;
-                note.y = parseInt(noteEl.style.top) || 0;
+                let newX = parseInt(noteEl.style.left) || 0;
+                let newY = parseInt(noteEl.style.top) || 0;
+
+                // Snap to closest date row and note area if enabled (default is true)
+                if (note.snapToDate !== false) {
+                    const snapped = findClosestDateRowPosition(newX, newY);
+                    newX = snapped.x;
+                    newY = snapped.y;
+                    noteEl.style.left = newX + 'px';
+                    noteEl.style.top = newY + 'px';
+                }
+
+                note.x = newX;
+                note.y = newY;
                 saveData();
             }
 
@@ -538,6 +1019,16 @@ function createFreeformNote(id, text, x, y) {
         document.addEventListener('mouseup', onMouseUp);
     });
 
+    // Handle input for inline editing
+    noteEl.addEventListener('input', () => {
+        const note = freeformNotes.find(n => n.id === id);
+        if (note) {
+            note.html = noteEl.innerHTML;
+            note.text = noteEl.textContent.trim();
+            saveData();
+        }
+    });
+
     return noteEl;
 }
 
@@ -546,11 +1037,20 @@ function createFreeformInput(x, y, existingText = '', existingId = null) {
     const existingInput = canvasLayer.querySelector('.note-input-inline');
     if (existingInput) existingInput.remove();
 
+    // Snap position to closest date row's note area for new notes
+    let snappedX = x;
+    let snappedY = y;
+    if (!existingId) {
+        const snapped = findClosestDateRowPosition(x, y);
+        snappedX = snapped.x;
+        snappedY = snapped.y;
+    }
+
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'note-input-inline';
-    input.style.left = x + 'px';
-    input.style.top = y + 'px';
+    input.style.left = snappedX + 'px';
+    input.style.top = snappedY + 'px';
     input.value = existingText;
     input.placeholder = 'Type here...';
 
@@ -562,21 +1062,28 @@ function createFreeformInput(x, y, existingText = '', existingId = null) {
             let noteId = existingId;
             if (existingId) {
                 const note = freeformNotes.find(n => n.id === existingId);
-                if (note) note.text = text;
+                if (note) {
+                    pushHistory(); // Save state before editing
+                    note.text = text;
+                }
             } else {
                 noteId = Date.now().toString();
+                pushHistory(); // Save state before adding note
                 freeformNotes.push({
                     id: noteId,
-                    text, x, y,
+                    text, x: snappedX, y: snappedY,
                     year: currentYear,
-                    half: currentHalf
+                    half: currentHalf,
+                    snapToDate: true,
+                    group: activeGroup
                 });
             }
             saveData();
 
-            const noteEl = createFreeformNote(noteId, text, x, y);
+            const noteEl = createFreeformNote(noteId, text, snappedX, snappedY);
             canvasLayer.appendChild(noteEl);
         } else if (existingId) {
+            pushHistory(); // Save state before deleting
             freeformNotes = freeformNotes.filter(n => n.id !== existingId);
             saveData();
         }
@@ -605,7 +1112,7 @@ function createFreeformLine(id, x1, y1, x2, y2, color, width) {
     container.dataset.lineId = id;
 
     // Use defaults if not specified
-    color = color || '#667eea';
+    color = color || '#333333';
     width = width || 8;
 
     // Update line geometry
@@ -763,55 +1270,9 @@ function createFreeformLine(id, x1, y1, x2, y2, color, width) {
     return container;
 }
 
+//
 // ==========================================
-// UNDO TOAST SYSTEM
-// ==========================================
-
-function showUndoToast(message) {
-    const undoToast = document.getElementById('undo-toast');
-    const undoMessage = document.getElementById('undo-message');
-
-    undoMessage.textContent = message;
-    undoToast.classList.remove('hidden');
-
-    if (undoTimeout) clearTimeout(undoTimeout);
-
-    undoTimeout = setTimeout(() => {
-        hideUndoToast();
-    }, 5000);
-}
-
-function hideUndoToast() {
-    const undoToast = document.getElementById('undo-toast');
-    undoToast.classList.add('hidden');
-    if (undoTimeout) clearTimeout(undoTimeout);
-}
-
-function performUndo() {
-    if (!lastDeletedItem) return;
-
-    if (lastDeletedItem.type === 'note') {
-        freeformNotes.push(lastDeletedItem.data);
-        saveData();
-        renderFreeformElements();
-    } else if (lastDeletedItem.type === 'line') {
-        freeformLines.push(lastDeletedItem.data);
-        saveData();
-        renderFreeformElements();
-    }
-
-    lastDeletedItem = null;
-    hideUndoToast();
-}
-
-// Setup undo toast event listeners
-function setupUndoListeners() {
-    document.getElementById('undo-btn').addEventListener('click', performUndo);
-    document.getElementById('close-undo-btn').addEventListener('click', hideUndoToast);
-}
-
-// ==========================================
-// ELEMENT POPUPS
+// INLINE TOOLBARS
 // ==========================================
 
 function showNoteEditor(noteId, noteElement) {
@@ -823,53 +1284,52 @@ function showNoteEditor(noteId, noteElement) {
     selectedElement = { type: 'note', id: noteId, element: noteElement };
     noteElement.classList.add('selected');
 
-    const popup = document.getElementById('note-editor-popup');
-    const container = document.getElementById('note-editor-container');
+    // Make note editable
+    noteElement.setAttribute('contenteditable', 'true');
+    noteElement.focus();
 
-    // Position popup near element
+    // Exit editing on Enter (prevent linebreak)
+    const enterHandler = (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            noteElement.blur();
+            deselectElement();
+            noteElement.removeEventListener('keydown', enterHandler);
+        }
+    };
+    noteElement.addEventListener('keydown', enterHandler);
+
+    const toolbar = document.getElementById('note-toolbar');
+
+    // Position toolbar ABOVE the element
     const rect = noteElement.getBoundingClientRect();
-    popup.style.left = Math.min(rect.left, window.innerWidth - 320) + 'px';
-    popup.style.top = Math.min(rect.bottom + 8, window.innerHeight - 250) + 'px';
+    const toolbarWidth = 320;
+    toolbar.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8)) + 'px';
+    toolbar.style.top = Math.max(8, rect.top - 40) + 'px';
 
-    popup.classList.remove('hidden');
+    toolbar.classList.remove('hidden');
 
-    // Initialize Quill if not done
-    if (!quillInstance) {
-        container.innerHTML = '';
-        quillInstance = new Quill(container, {
-            theme: 'snow',
-            placeholder: 'Type your note...',
-            modules: {
-                toolbar: [
-                    ['bold', 'italic', 'underline'],
-                    [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-                    ['clean']
-                ]
-            }
-        });
+    // Mark that an editor is open (for cursor styling)
+    document.body.classList.add('editor-open');
 
-        quillInstance.on('text-change', () => {
-            if (selectedElement && selectedElement.type === 'note') {
-                const currentNote = freeformNotes.find(n => n.id === selectedElement.id);
-                if (currentNote) {
-                    currentNote.html = quillInstance.root.innerHTML;
-                    currentNote.text = quillInstance.getText().trim();
-                    saveData();
-                    // Update element text
-                    selectedElement.element.textContent = currentNote.text || 'Empty note';
-                }
-            }
-        });
-    }
+    // Update snap toggle state
+    const snapToggle = document.getElementById('note-snap-toggle');
+    snapToggle.checked = note.snapToDate !== false;
 
-    // Load content
-    if (note.html) {
-        quillInstance.root.innerHTML = note.html;
-    } else {
-        quillInstance.setText(note.text || '');
-    }
+    // Update color pickers to match note's current colors
+    const fontColorPicker = document.getElementById('font-color-picker');
+    const fontColorIndicator = document.getElementById('font-color-indicator');
+    const bgColorPicker = document.getElementById('bg-color-picker');
+    const bgColorIndicator = document.getElementById('bg-color-indicator');
 
-    quillInstance.focus();
+    fontColorPicker.value = note.fontColor || '#333333';
+    fontColorIndicator.style.background = note.fontColor || '#333333';
+    bgColorPicker.value = note.bgColor || '#ffff00';
+    bgColorIndicator.style.background = note.bgColor || 'transparent';
+
+    // Update group selector
+    const noteGroupSelect = document.getElementById('note-group-select');
+    noteGroupSelect.value = note.group || activeGroup;
 }
 
 function showLineEditor(lineId, lineElement) {
@@ -881,35 +1341,52 @@ function showLineEditor(lineId, lineElement) {
     selectedElement = { type: 'line', id: lineId, element: lineElement };
     lineElement.classList.add('selected');
 
-    const popup = document.getElementById('line-editor-popup');
+    const toolbar = document.getElementById('line-toolbar');
 
-    // Position popup near element
+    // Position toolbar ABOVE the element
     const rect = lineElement.getBoundingClientRect();
-    popup.style.left = Math.min(rect.left, window.innerWidth - 200) + 'px';
-    popup.style.top = Math.min(rect.bottom + 8, window.innerHeight - 200) + 'px';
+    const toolbarWidth = 140;
+    toolbar.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - toolbarWidth - 8)) + 'px';
+    toolbar.style.top = Math.max(8, rect.top - 40) + 'px';
 
-    popup.classList.remove('hidden');
+    toolbar.classList.remove('hidden');
 
-    // Update selection state in popup
-    const currentColor = line.color || '#667eea';
-    const currentWidth = line.width || 8;
+    // Update color picker to match current line color
+    const colorPicker = document.getElementById('line-color-picker');
+    const colorIndicator = document.getElementById('line-color-indicator');
+    colorPicker.value = line.color || '#333333';
+    colorIndicator.style.background = line.color || '#333333';
 
-    popup.querySelectorAll('.color-swatch').forEach(swatch => {
-        swatch.classList.toggle('selected', swatch.dataset.color === currentColor);
-    });
+    // Update group selector
+    const lineGroupSelect = document.getElementById('line-group-select');
+    lineGroupSelect.value = line.group || activeGroup;
 
-    popup.querySelectorAll('.width-btn').forEach(btn => {
-        btn.classList.toggle('selected', parseInt(btn.dataset.width) === currentWidth);
-    });
+    // Mark that an editor is open (for cursor styling)
+    document.body.classList.add('editor-open');
 }
 
 function deselectElement() {
     if (selectedElement) {
         selectedElement.element.classList.remove('selected');
+
+        // If it was a note, disable editing and save
+        if (selectedElement.type === 'note') {
+            selectedElement.element.setAttribute('contenteditable', 'false');
+            const note = freeformNotes.find(n => n.id === selectedElement.id);
+            if (note) {
+                note.html = selectedElement.element.innerHTML;
+                note.text = selectedElement.element.textContent.trim();
+                saveData();
+            }
+        }
+
         selectedElement = null;
     }
-    document.getElementById('note-editor-popup').classList.add('hidden');
-    document.getElementById('line-editor-popup').classList.add('hidden');
+    document.getElementById('note-toolbar').classList.add('hidden');
+    document.getElementById('line-toolbar').classList.add('hidden');
+
+    // Remove editor-open class (for cursor styling)
+    document.body.classList.remove('editor-open');
 }
 
 function deleteSelectedElement() {
@@ -918,81 +1395,182 @@ function deleteSelectedElement() {
     if (selectedElement.type === 'note') {
         const note = freeformNotes.find(n => n.id === selectedElement.id);
         if (note) {
+            pushHistory(); // Save state before deleting
             lastDeletedItem = { type: 'note', data: JSON.parse(JSON.stringify(note)) };
             freeformNotes = freeformNotes.filter(n => n.id !== selectedElement.id);
             saveData();
             selectedElement.element.remove();
-            showUndoToast('Note deleted');
         }
     } else if (selectedElement.type === 'line') {
         const line = freeformLines.find(l => l.id === selectedElement.id);
         if (line) {
+            pushHistory(); // Save state before deleting
             lastDeletedItem = { type: 'line', data: JSON.parse(JSON.stringify(line)) };
             freeformLines = freeformLines.filter(l => l.id !== selectedElement.id);
             saveData();
             // For lines, element is the container
             selectedElement.element.closest('.note-line-container')?.remove() || selectedElement.element.remove();
-            showUndoToast('Line deleted');
         }
     }
 
     deselectElement();
 }
 
-function setupPopupListeners() {
-    // Note delete button
-    document.getElementById('note-delete-btn').addEventListener('click', deleteSelectedElement);
+function setupToolbarListeners() {
+    // ==========================================
+    // NOTE TOOLBAR
+    // ==========================================
 
-    // Line delete button
-    document.getElementById('line-delete-btn').addEventListener('click', deleteSelectedElement);
-
-    // Line color swatches
-    document.getElementById('line-editor-popup').querySelectorAll('.color-swatch').forEach(swatch => {
-        swatch.addEventListener('click', () => {
-            if (selectedElement && selectedElement.type === 'line') {
-                const line = freeformLines.find(l => l.id === selectedElement.id);
-                if (line) {
-                    line.color = swatch.dataset.color;
-                    saveData();
-
-                    // Update visual
-                    const lineEl = selectedElement.element.closest('.note-line-container')?.querySelector('.note-line') || selectedElement.element;
-                    lineEl.style.background = line.color;
-
-                    // Update selection state
-                    document.getElementById('line-editor-popup').querySelectorAll('.color-swatch').forEach(s => {
-                        s.classList.toggle('selected', s.dataset.color === line.color);
-                    });
-                }
-            }
+    // Formatting buttons (bold, italic, underline)
+    document.querySelectorAll('#note-toolbar .toolbar-btn[data-command]').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // Prevent losing focus from note
+            const command = btn.dataset.command;
+            document.execCommand(command, false, null);
         });
     });
 
-    // Line width buttons
-    document.getElementById('line-editor-popup').querySelectorAll('.width-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+    // Font color picker - applies to entire note
+    document.getElementById('font-color-picker').addEventListener('input', (e) => {
+        const color = e.target.value;
+        document.getElementById('font-color-indicator').style.background = color;
+
+        if (selectedElement && selectedElement.type === 'note') {
+            pushHistory();
+            const note = freeformNotes.find(n => n.id === selectedElement.id);
+            if (note) {
+                note.fontColor = color;
+                selectedElement.element.style.color = color;
+                saveData();
+            }
+        }
+    });
+
+    // Background color picker - applies to entire note
+    document.getElementById('bg-color-picker').addEventListener('input', (e) => {
+        const color = e.target.value;
+        document.getElementById('bg-color-indicator').style.background = color;
+
+        if (selectedElement && selectedElement.type === 'note') {
+            pushHistory();
+            const note = freeformNotes.find(n => n.id === selectedElement.id);
+            if (note) {
+                note.bgColor = color;
+                selectedElement.element.style.backgroundColor = color;
+                saveData();
+            }
+        }
+    });
+
+    // Clear background button
+    document.getElementById('clear-bg-btn').addEventListener('click', () => {
+        if (selectedElement && selectedElement.type === 'note') {
+            pushHistory();
+            const note = freeformNotes.find(n => n.id === selectedElement.id);
+            if (note) {
+                note.bgColor = null;
+                selectedElement.element.style.backgroundColor = 'transparent';
+                document.getElementById('bg-color-indicator').style.background = 'transparent';
+                saveData();
+            }
+        }
+    });
+
+    // Note snap toggle
+    document.getElementById('note-snap-toggle').addEventListener('change', (e) => {
+        if (selectedElement && selectedElement.type === 'note') {
+            const note = freeformNotes.find(n => n.id === selectedElement.id);
+            if (note) {
+                note.snapToDate = e.target.checked;
+
+                // If turning snap on, immediately snap the note
+                if (note.snapToDate) {
+                    const newY = findClosestDateRowY(note.y);
+                    note.y = newY;
+                    selectedElement.element.style.top = newY + 'px';
+                }
+
+                saveData();
+            }
+        }
+    });
+
+    // Note group select
+    document.getElementById('note-group-select').addEventListener('change', (e) => {
+        if (selectedElement && selectedElement.type === 'note') {
+            pushHistory();
+            const note = freeformNotes.find(n => n.id === selectedElement.id);
+            if (note) {
+                note.group = e.target.value;
+                saveData();
+            }
+        }
+    });
+
+    // Note delete button
+    document.getElementById('note-delete-btn').addEventListener('click', deleteSelectedElement);
+
+    // ==========================================
+    // LINE TOOLBAR
+    // ==========================================
+
+    // Line width dropdown items
+    document.querySelectorAll('#line-width-menu .dropdown-item').forEach(item => {
+        item.addEventListener('click', () => {
             if (selectedElement && selectedElement.type === 'line') {
                 const line = freeformLines.find(l => l.id === selectedElement.id);
                 if (line) {
-                    line.width = parseInt(btn.dataset.width);
+                    line.width = parseInt(item.dataset.width);
                     saveData();
 
                     // Update visual
                     const lineEl = selectedElement.element.closest('.note-line-container')?.querySelector('.note-line') || selectedElement.element;
                     lineEl.style.height = line.width + 'px';
-
-                    // Update selection state
-                    document.getElementById('line-editor-popup').querySelectorAll('.width-btn').forEach(b => {
-                        b.classList.toggle('selected', parseInt(b.dataset.width) === line.width);
-                    });
                 }
             }
         });
     });
 
+    // Line color picker
+    document.getElementById('line-color-picker').addEventListener('input', (e) => {
+        const color = e.target.value;
+        document.getElementById('line-color-indicator').style.background = color;
+
+        if (selectedElement && selectedElement.type === 'line') {
+            const line = freeformLines.find(l => l.id === selectedElement.id);
+            if (line) {
+                line.color = color;
+                saveData();
+
+                // Update visual
+                const lineEl = selectedElement.element.closest('.note-line-container')?.querySelector('.note-line') || selectedElement.element;
+                lineEl.style.background = color;
+            }
+        }
+    });
+
+    // Line group select
+    document.getElementById('line-group-select').addEventListener('change', (e) => {
+        if (selectedElement && selectedElement.type === 'line') {
+            pushHistory();
+            const line = freeformLines.find(l => l.id === selectedElement.id);
+            if (line) {
+                line.group = e.target.value;
+                saveData();
+            }
+        }
+    });
+
+    // Line delete button
+    document.getElementById('line-delete-btn').addEventListener('click', deleteSelectedElement);
+
+    // ==========================================
+    // GLOBAL LISTENERS
+    // ==========================================
+
     // Click outside to deselect
     document.addEventListener('click', (e) => {
-        if (!e.target.closest('.element-popup') &&
+        if (!e.target.closest('.inline-toolbar') &&
             !e.target.closest('.note-text.freeform') &&
             !e.target.closest('.note-line-container') &&
             !e.target.closest('.note-line')) {
@@ -1000,16 +1578,47 @@ function setupPopupListeners() {
         }
     });
 
-    // Escape to close
+    // Escape to close, Backspace/Delete to remove, Cmd+Z to undo, Cmd+Shift+Z to redo
     document.addEventListener('keydown', (e) => {
+        // Undo: Cmd+Z (Mac) or Ctrl+Z (Windows)
+        if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+            e.preventDefault();
+            undoAction();
+            return;
+        }
+
+        // Redo: Cmd+Shift+Z (Mac) or Ctrl+Y (Windows)
+        if ((e.metaKey && e.shiftKey && e.key === 'z') || (e.ctrlKey && e.key === 'y')) {
+            e.preventDefault();
+            redoAction();
+            return;
+        }
+
         if (e.key === 'Escape') {
             deselectElement();
         }
+
+        // Delete/Backspace deletes selected element (but only if not editing text)
+        if ((e.key === 'Backspace' || e.key === 'Delete') && selectedElement) {
+            // For notes, only delete if not actively editing (contenteditable)
+            if (selectedElement.type === 'note') {
+                const isEditing = selectedElement.element.getAttribute('contenteditable') === 'true';
+                // Only delete if the note is empty or we're not focused on it
+                if (isEditing && document.activeElement === selectedElement.element) {
+                    return; // Allow normal backspace behavior in text
+                }
+            }
+            e.preventDefault();
+            deleteSelectedElement();
+        }
     });
+
+    // Undo/Redo button click handlers
+    document.getElementById('undo-action-btn').addEventListener('click', undoAction);
+    document.getElementById('redo-action-btn').addEventListener('click', redoAction);
 }
 
-// Initialize popup listeners after DOM ready
+// Initialize listeners after DOM ready
 document.addEventListener('DOMContentLoaded', () => {
-    setupUndoListeners();
-    setupPopupListeners();
+    setupToolbarListeners();
 });
