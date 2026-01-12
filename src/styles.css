@@ -1066,10 +1066,6 @@ body.dark-mode .modal-input {
     padding: 12px 0;
 }
 
-.settings-row:not(:last-child) {
-    border-bottom: 1px solid var(--border-color);
-}
-
 .settings-row label {
     font-size: 14px;
     color: var(--text-primary);
@@ -1110,4 +1106,37 @@ body.dark-mode .toggle-option.active {
     color: var(--text-primary);
     font-size: 14px;
     cursor: pointer;
+}
+
+.settings-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 8px 0;
+}
+
+.settings-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.settings-btn:hover {
+    background: var(--row-hover-bg);
+}
+
+.settings-btn svg {
+    flex-shrink: 0;
 }

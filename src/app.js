@@ -57,7 +57,13 @@ const UI_TEXT = {
         delete: 'Slet',
         cancel: 'Annuller',
         personal: 'Personligt',
-        work: 'Arbejde'
+        work: 'Arbejde',
+        data: 'Data',
+        exportData: 'Eksporter',
+        importData: 'Importer',
+        exportSuccess: 'Kalender eksporteret!',
+        importSuccess: 'Kalender importeret!',
+        importError: 'Kunne ikke importere fil'
     },
     en: {
         settings: 'Settings',
@@ -76,7 +82,13 @@ const UI_TEXT = {
         delete: 'Delete',
         cancel: 'Cancel',
         personal: 'Personal',
-        work: 'Work'
+        work: 'Work',
+        data: 'Data',
+        exportData: 'Export',
+        importData: 'Import',
+        exportSuccess: 'Calendar exported!',
+        importSuccess: 'Calendar imported!',
+        importError: 'Could not import file'
     }
 };
 
@@ -729,6 +741,72 @@ function setupSettings() {
         renderGroupsUI();
         updateSettingsUI();
     });
+
+    // Export button
+    const exportBtn = document.getElementById('export-btn');
+    const importBtn = document.getElementById('import-btn');
+    const importFile = document.getElementById('import-file');
+
+    exportBtn.addEventListener('click', () => {
+        const t = UI_TEXT[currentLanguage];
+        const data = {
+            version: 1,
+            exportDate: new Date().toISOString(),
+            notes: freeformNotes,
+            lines: freeformLines,
+            groups: groups
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `redd-plan-${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        // Show success briefly
+        const originalText = exportBtn.querySelector('#export-text').textContent;
+        exportBtn.querySelector('#export-text').textContent = '✓';
+        setTimeout(() => {
+            exportBtn.querySelector('#export-text').textContent = originalText;
+        }, 1500);
+    });
+
+    importBtn.addEventListener('click', () => {
+        importFile.click();
+    });
+
+    importFile.addEventListener('change', (e) => {
+        const t = UI_TEXT[currentLanguage];
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                if (data.notes) freeformNotes = data.notes;
+                if (data.lines) freeformLines = data.lines;
+                if (data.groups) groups = data.groups;
+
+                saveData();
+                renderCalendar();
+                renderFreeformElements();
+                renderGroupsUI();
+
+                // Show success briefly
+                const originalText = importBtn.querySelector('#import-text').textContent;
+                importBtn.querySelector('#import-text').textContent = '✓';
+                setTimeout(() => {
+                    importBtn.querySelector('#import-text').textContent = originalText;
+                }, 1500);
+            } catch (err) {
+                alert(t.importError);
+            }
+        };
+        reader.readAsText(file);
+        importFile.value = ''; // Reset for same file selection
+    });
 }
 
 // Update settings UI to reflect current state
@@ -743,6 +821,9 @@ function updateSettingsUI() {
     document.getElementById('settings-title').textContent = t.settings;
     document.getElementById('theme-label').textContent = t.theme;
     document.getElementById('language-label').textContent = t.language;
+    document.getElementById('data-label').textContent = t.data;
+    document.getElementById('export-text').textContent = t.exportData;
+    document.getElementById('import-text').textContent = t.importData;
 }
 
 // Update all UI text based on current language
