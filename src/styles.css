@@ -369,10 +369,11 @@ body.dark-mode .group-toggle input[type="checkbox"] {
     cursor: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%23666" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>') 0 16, crosshair;
 }
 
-/* When editor is open, use normal cursor */
+/* When editor is open, use normal cursor everywhere */
 body.editor-open .calendar-container,
+body.editor-open .calendar-container *,
 body.editor-open .note-area {
-    cursor: default;
+    cursor: default !important;
 }
 
 /* Canvas Layer - overlay for freeform notes */
@@ -1139,4 +1140,15 @@ body.dark-mode .toggle-option.active {
 
 .settings-btn svg {
     flex-shrink: 0;
+}
+
+/* CRITICAL: Override all cursors when editor is open (must be at end for specificity) */
+body.editor-open,
+body.editor-open *,
+body.editor-open .calendar-container,
+body.editor-open .calendar-container *,
+body.editor-open .note-area,
+body.editor-open .day-row,
+body.editor-open .canvas-layer {
+    cursor: default !important;
 }

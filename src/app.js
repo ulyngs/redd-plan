@@ -1057,6 +1057,13 @@ function setupCanvasInteraction() {
             return;
         }
 
+        // If an note input is open, close it instead of creating new elements
+        const existingInput = canvasLayer.querySelector('.note-input-inline');
+        if (existingInput) {
+            existingInput.blur();
+            return;
+        }
+
         // If an editor is open, close it instead of creating new elements
         if (selectedElement) {
             deselectElement();
@@ -1298,6 +1305,8 @@ function createFreeformInput(x, y, existingText = '', existingId = null) {
     input.placeholder = 'Type here...';
 
     const finishEditing = () => {
+        document.body.classList.remove('editor-open');
+        calendarContainer.style.cursor = ''; // Restore default (pencil from CSS)
         const text = input.value.trim();
         input.remove();
 
@@ -1344,6 +1353,17 @@ function createFreeformInput(x, y, existingText = '', existingId = null) {
     });
 
     canvasLayer.appendChild(input);
+    document.body.classList.add('editor-open'); // Change cursor to normal
+    console.log('editor-open class added:', document.body.classList.contains('editor-open'));
+
+    // Keep editor-open while input is focused
+    // Keep editor-open while input is focused
+    input.addEventListener('focus', () => {
+        document.body.classList.add('editor-open');
+        calendarContainer.style.cursor = 'default'; // Override pencil cursor
+    });
+
+    calendarContainer.style.cursor = 'default'; // Override pencil cursor via inline style
     input.focus();
 }
 
